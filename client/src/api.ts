@@ -1,4 +1,4 @@
-import type { BypassPathResult, EvidenceFormValues, GraphState, ImportPreviewResult, MergeConflictKind, MinimumChainsResult, MustPassResult, OrderQueryResult, PruneResult, RedundantEdge, TimeWindowResult } from './types';
+import type { BypassPathResult, EvidenceFormValues, GraphState, ImportPreviewResult, MergeConflictKind, MinimumChainsResult, MustPassResult, OrderQueryResult, PruneResult, RedundantEdge, ShareSnapshot, TimeWindowResult } from './types';
 
 export class ApiError extends Error {
   status: number;
@@ -61,5 +61,29 @@ export const api = {
   /** 确认导入：服务端在事务内重新校验令牌、文件内容与当前图，全部一致才整体替换 */
   importConfirm: (token: string, snapshotText: string) =>
     request<GraphState>('/api/import/confirm', json('POST', { token, snapshotText })),
+  /** 脱敏分享预览（只读）：按当前勾选的卡片 id 以最新图实时计算脱敏快照 */
+  sharePreview: (ids: string[]) => request<ShareSnapshot>('/api/share/preview', json('POST', { ids })),
   seed: () => request<GraphState>('/api/seed', { method: 'POST' }),
 };
+
+/**
+ * 脱敏分享下载（只读）：以最新图实时计算并以附件方式返回脱敏 JSON 文件。
+ * 错误响应仍为 JSON（400 空选择 / 404 未知 id），读出后按 ApiError 抛出。
+ */
+export async function downloadShare(ids: string[]): Promise<void> {
+  const qs = ids.map((id) => `ids=${encodeURIComponent(id)}`).join('&');
+  const res = await fetch(`/api/share/export?${qs}`);
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({}))) as { message?: string };
+    throw new ApiError(res.status, data);
+  }
+  const blob = await res.blob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'evidence-share.json';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}

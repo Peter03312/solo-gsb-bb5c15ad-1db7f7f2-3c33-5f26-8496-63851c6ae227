@@ -1566,3 +1566,128 @@ body {
 .ip-stale {
   margin: 12px 0 0;
 }
+
+/* ---------- 外部分享（脱敏快照） ---------- */
+
+.share-panel {
+  background: var(--bg-soft);
+  border: 1px solid rgba(139, 147, 255, 0.45);
+  border-radius: var(--radius);
+  padding: 14px 18px;
+  margin-bottom: 14px;
+}
+
+.share-panel .chain-head h2 {
+  color: #8b93ff;
+}
+
+.share-controls {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 8px 0 10px;
+}
+
+.share-tip {
+  font-size: 12.5px;
+}
+
+.share-checklist {
+  list-style: none;
+  margin: 0 0 6px;
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+  gap: 6px;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.share-check-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--panel);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.share-check-item:hover {
+  border-color: var(--accent);
+}
+
+.share-check-item input {
+  accent-color: #8b93ff;
+  width: 15px;
+  height: 15px;
+}
+
+.share-check-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.share-actions {
+  margin-top: 12px;
+}
+
+/* 画布卡片：分享模式下可点选，勾选后紫色高亮 */
+.card.share-card {
+  cursor: pointer;
+}
+
+.card.share-picked {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(139, 147, 255, 0.25);
+  background: #232a4b;
+}
+
+.share-checkbox {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  width: 16px;
+  height: 16px;
+  accent-color: #8b93ff;
+  cursor: pointer;
+}
+
+.card.share-picked .share-checkbox {
+  filter: drop-shadow(0 0 3px rgba(139, 147, 255, 0.8));
+}
+
+/* 分享预览弹窗：非折叠小节标题 */
+.ip-section-static {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  font-size: 13.5px;
+}
+
+.ip-section-static .ip-section-title {
+  flex: 1;
+}
+
+.share-json-toggle {
+  margin: 10px 0 4px;
+}
+
+.share-json {
+  max-height: 200px;
+  overflow: auto;
+  background: var(--bg-soft);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 12px;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: #c4cbe4;
+  white-space: pre;
+  margin: 0 0 10px;
+}

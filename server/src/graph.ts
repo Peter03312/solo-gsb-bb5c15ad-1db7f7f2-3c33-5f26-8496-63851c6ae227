@@ -295,7 +295,7 @@ export function queryOrder(nodes: OrderableNode[], edges: EdgeLike[], aId: strin
 /* ---------- 必经证据分析 ---------- */
 
 /** 从 start 出发沿有向边可达的全部节点集合（含 start 自身） */
-function reachableSet(edges: EdgeLike[], start: string): Set<string> {
+export function reachableSet(edges: EdgeLike[], start: string): Set<string> {
   const adj = new Map<string, string[]>();
   for (const e of edges) {
     const list = adj.get(e.fromId);

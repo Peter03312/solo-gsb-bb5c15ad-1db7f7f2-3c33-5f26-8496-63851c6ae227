@@ -15,6 +15,10 @@ interface BoardProps {
   linkFrom: string | null;
   /** 合并重复证据模式：true=待选源卡片；字符串=已选源卡片 id、待选保留卡片；false=未启用 */
   mergeMode: boolean | string;
+  /** 脱敏分享模式：卡片以勾选框选择要公开的证据，禁用连线 / 合并 / 删除交互 */
+  shareMode: boolean;
+  /** 分享模式下已勾选的卡片 id */
+  shareSelected: Set<string>;
   /** 瘦身面板选中的冗余连线：高亮原连线与其替代路径 */
   pruneFocus: RedundantEdge | null;
   /** 顺序查询：高亮判定所依据的约束路径（节点 id 序列） */
@@ -31,6 +35,7 @@ interface BoardProps {
   onCancelLink: () => void;
   onConnect: (fromId: string, toId: string) => void;
   onMergeSelect: (id: string) => void;
+  onToggleShare: (id: string) => void;
   onEdit: (ev: Evidence) => void;
   onDelete: (ev: Evidence) => void;
   onDeleteEdge: (id: number) => void;
@@ -234,7 +239,7 @@ export default function Board(props: BoardProps) {
   };
 
   const startLinkDrag = (e: ReactPointerEvent, id: string) => {
-    if (props.mergeMode !== false) return;
+    if (props.mergeMode !== false || props.shareMode) return;
     e.preventDefault();
     e.stopPropagation();
     boardRef.current?.setPointerCapture(e.pointerId);
@@ -264,6 +269,10 @@ export default function Board(props: BoardProps) {
   };
 
   const onCardClick = (ev: Evidence) => {
+    if (props.shareMode) {
+      props.onToggleShare(ev.id);
+      return;
+    }
     if (props.mergeMode !== false) {
       props.onMergeSelect(ev.id);
       return;
@@ -348,8 +357,18 @@ export default function Board(props: BoardProps) {
                       : 'arrow';
           const d = curve(s, t);
           return (
-            <g key={e.id} className={cls} onClick={() => props.onDeleteEdge(e.id)}>
-              <title>{`${byId.get(e.fromId)?.title ?? ''} 必须早于 ${byId.get(e.toId)?.title ?? ''}（点击删除）`}</title>
+            <g
+              key={e.id}
+              className={cls}
+              onClick={() => {
+                if (!props.shareMode) props.onDeleteEdge(e.id);
+              }}
+            >
+              <title>
+                {props.shareMode
+                  ? `${byId.get(e.fromId)?.title ?? ''} 必须早于 ${byId.get(e.toId)?.title ?? ''}`
+                  : `${byId.get(e.fromId)?.title ?? ''} 必须早于 ${byId.get(e.toId)?.title ?? ''}（点击删除）`}
+              </title>
               <path className="edge-hit" d={d} />
               <path className="edge-line" d={d} markerEnd={`url(#${marker})`} />
             </g>
@@ -409,6 +428,7 @@ export default function Board(props: BoardProps) {
               const isTwOutOfRange = twOutOfRange.has(ev.id);
               const chainIndex = chainPos.get(ev.id);
               const isChainMember = chainIndex !== undefined;
+              const isSharePicked = props.shareMode && props.shareSelected.has(ev.id);
               return (
                 <article
                   key={ev.id}
@@ -431,12 +451,24 @@ export default function Board(props: BoardProps) {
                     isTwPivot ? 'tw-pivot' : '',
                     isTwOutOfRange ? 'tw-outrange' : '',
                     isChainMember ? 'chain-member' : '',
+                    props.shareMode ? 'share-card' : '',
+                    isSharePicked ? 'share-picked' : '',
                   ]
                     .filter(Boolean)
                     .join(' ')}
                   onClick={() => onCardClick(ev)}
                 >
                   <h3 className="card-title">{ev.title}</h3>
+                  {props.shareMode && (
+                    <input
+                      className="share-checkbox"
+                      type="checkbox"
+                      checked={isSharePicked}
+                      title={isSharePicked ? '取消公开该证据' : '勾选公开该证据'}
+                      onChange={() => props.onToggleShare(ev.id)}
+                      onClick={(e) => e.stopPropagation()}
+                    />
+                  )}
                   {isChainMember && <span className="chain-badge" title="该卡在复核组内的先后序号">第 {chainIndex! + 1} 步</span>}
                   <div className="card-meta">
                     {fmtTime(ev.occurredAt) && <span className="chip">🕒 {fmtTime(ev.occurredAt)}</span>}
@@ -450,6 +482,7 @@ export default function Board(props: BoardProps) {
                         e.stopPropagation();
                         props.onEdit(ev);
                       }}
+                      disabled={props.shareMode}
                     >
                       编辑
                     </button>
@@ -459,6 +492,7 @@ export default function Board(props: BoardProps) {
                         e.stopPropagation();
                         props.onDelete(ev);
                       }}
+                      disabled={props.shareMode}
                     >
                       删除
                     </button>
@@ -466,6 +500,7 @@ export default function Board(props: BoardProps) {
                       className={`btn small link${isSource ? ' active' : ''}`}
                       title="拖拽到另一张卡片，或点击后再点目标卡片"
                       onPointerDown={(e) => startLinkDrag(e, ev.id)}
+                      disabled={props.shareMode}
                     >
                       ⇢ 连线
                     </button>

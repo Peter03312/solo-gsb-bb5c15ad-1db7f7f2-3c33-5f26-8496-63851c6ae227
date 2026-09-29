@@ -242,3 +242,14 @@ export interface ImportPreviewResult {
   token: string;
   diff: ImportDiff;
 }
+
+/* ---------- 脱敏分享（只读） ---------- */
+
+/** 分享快照：沿用现有快照格式（app/version/evidence/edges，边端点为 from/to） */
+export interface ShareSnapshot {
+  app: string;
+  version: number;
+  exportedAt: string;
+  evidence: Evidence[];
+  edges: Array<{ from: string; to: string }>;
+}

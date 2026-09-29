@@ -16,6 +16,7 @@ import {
   toEvidenceRows,
 } from './importing';
 import { resetWithSample, seedIfEmpty } from './seed';
+import { assertShareSnapshotImportable, buildShareSnapshot } from './sharing';
 import type { BypassPathResult, GraphState, MinimumChainsResult, MustPassResult, OrderQueryResult, OrderWitness, PruneResult, RedundancyReport, TimeWindowResult } from './types';
 
 const app = express();
@@ -447,6 +448,40 @@ app.get('/api/export', (_req, res) => {
   };
   res.setHeader('Content-Disposition', 'attachment; filename="evidence-snapshot.json"');
   res.json(snapshot);
+});
+
+/* ---------- 脱敏分享（只读：勾选卡片 → 预览 / 下载脱敏快照） ---------- */
+
+/**
+ * 分享预览（只读）：按当前勾选的卡片 id 列表，以**当前最新图**实时计算脱敏快照。
+ * 每次请求都重新读取数据库并重新计算，因此图或选择变化后旧预览自然作废。
+ * body: { ids: string[] }；重复 id 去重；空选择返回 400；含未知 id 返回 404。
+ * 响应即完整快照对象（含所选卡片原值与仅连接所选卡片的可达保持边），不暴露未选卡片。
+ */
+app.post('/api/share/preview', (req, res) => {
+  const ids = (req.body ?? {})?.ids;
+  const result = buildShareSnapshot(getEvidence(), getEdges(), ids);
+  if (!result.ok) return res.status(result.status).json({ message: result.message });
+  if (!assertShareSnapshotImportable(result.snapshot)) {
+    return res.status(500).json({ message: '分享快照自检失败：结果无法通过导入校验，已拒绝下发' });
+  }
+  res.json(result.snapshot);
+});
+
+/**
+ * 分享下载（只读）：GET /api/share/export?ids=<id>&ids=<id>…
+ * 与预览同一套计算，始终按下载瞬间的最新图重算；以附件方式下发 JSON 文件。
+ */
+app.get('/api/share/export', (req, res) => {
+  const rawIds = req.query.ids;
+  const ids = Array.isArray(rawIds) ? rawIds : rawIds === undefined ? [] : [rawIds];
+  const result = buildShareSnapshot(getEvidence(), getEdges(), ids);
+  if (!result.ok) return res.status(result.status).json({ message: result.message });
+  if (!assertShareSnapshotImportable(result.snapshot)) {
+    return res.status(500).json({ message: '分享快照自检失败：结果无法通过导入校验，已拒绝下发' });
+  }
+  res.setHeader('Content-Disposition', 'attachment; filename="evidence-share.json"');
+  res.json(result.snapshot);
 });
 
 /** 整体替换为给定快照（调用方须已完成解析、环校验与差异确认） */

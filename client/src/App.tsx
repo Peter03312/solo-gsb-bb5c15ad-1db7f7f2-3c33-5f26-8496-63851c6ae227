@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { api, ApiError } from './api';
+import { api, ApiError, downloadShare } from './api';
 import Board from './components/Board';
 import CardForm from './components/CardForm';
 import ConflictBanner from './components/ConflictBanner';
@@ -8,9 +8,11 @@ import MustPassPanel from './components/MustPassPanel';
 import OrderQueryPanel from './components/OrderQueryPanel';
 import PrunePanel from './components/PrunePanel';
 import ReviewChainsPanel from './components/ReviewChainsPanel';
+import SharePanel from './components/SharePanel';
+import SharePreviewDialog from './components/SharePreviewDialog';
 import TimeWindowPanel from './components/TimeWindowPanel';
 import TimelinePanel from './components/TimelinePanel';
-import type { Evidence, EvidenceFormValues, GraphState, ImportDiff, MergeConflict, MustPassHighlight, OrderWitness, RedundantEdge, ReviewChainHighlight, TimeWindowHighlight } from './types';
+import type { Evidence, EvidenceFormValues, GraphState, ImportDiff, MergeConflict, MustPassHighlight, OrderWitness, RedundantEdge, ReviewChainHighlight, ShareSnapshot, TimeWindowHighlight } from './types';
 
 export interface Conflict {
   cycle: string[];
@@ -43,6 +45,10 @@ export default function App() {
   const [importPreview, setImportPreview] = useState<
     { fileName: string; snapshotText: string; token: string; diff: ImportDiff; staleMessage: string | null } | null
   >(null);
+  /** 脱敏分享模式与勾选集合；sharePreview 为按最新图算出的脱敏快照 */
+  const [shareMode, setShareMode] = useState(false);
+  const [shareSelected, setShareSelected] = useState<Set<string>>(new Set());
+  const [sharePreview, setSharePreview] = useState<ShareSnapshot | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -70,11 +76,28 @@ export default function App() {
     };
   }, [state]);
 
+  /* 图一变化：清除旧分享预览（下载时会按最新图重算），并剔除已不存在的勾选 */
+  useEffect(() => {
+    if (!state) return;
+    setSharePreview(null);
+    setShareSelected((cur) => {
+      if (cur.size === 0) return cur;
+      const ids = new Set(state.evidence.map((e) => e.id));
+      const next = new Set([...cur].filter((id) => ids.has(id)));
+      return next.size === cur.size ? cur : next;
+    });
+  }, [state]);
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        if (sharePreview) {
+          setSharePreview(null);
+          return;
+        }
         setLinkFrom(null);
         setMergeMode(false);
+        setShareMode(false);
         setEditing(null);
         setOrderPath(null);
         setOrderPreview(null);
@@ -83,7 +106,7 @@ export default function App() {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [busy]);
+  }, [busy, sharePreview]);
 
   const handleApiError = useCallback((e: unknown) => {
     if (e instanceof ApiError && e.payload.cycle) {
@@ -270,6 +293,59 @@ export default function App() {
     void run(() => api.seed());
   }, [run]);
 
+  /* ---------- 脱敏分享（只读） ---------- */
+
+  const toggleShareSelect = useCallback((id: string) => {
+    setSharePreview(null);
+    setShareSelected((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const enterShareMode = useCallback(() => {
+    setShareMode(true);
+    setLinkFrom(null);
+    setMergeMode(false);
+  }, []);
+
+  const exitShareMode = useCallback(() => {
+    setShareMode(false);
+    setSharePreview(null);
+  }, []);
+
+  /** 预览：服务端以当前最新图实时计算脱敏快照（每次勾选变化后旧预览已清除） */
+  const requestSharePreview = useCallback(async () => {
+    const ids = [...shareSelected];
+    if (ids.length === 0) return;
+    setBusy(true);
+    try {
+      setSharePreview(await api.sharePreview(ids));
+      setError(null);
+    } catch (e) {
+      handleApiError(e);
+    } finally {
+      setBusy(false);
+    }
+  }, [shareSelected, handleApiError]);
+
+  /** 下载：始终按下载瞬间的最新图重新计算，不直接复用预览文本 */
+  const downloadShared = useCallback(async () => {
+    const ids = [...shareSelected];
+    if (ids.length === 0) return;
+    setBusy(true);
+    try {
+      await downloadShare(ids);
+      setError(null);
+    } catch (e) {
+      handleApiError(e);
+    } finally {
+      setBusy(false);
+    }
+  }, [shareSelected, handleApiError]);
+
   /* 确认后批量移除：服务端在单个事务中复核并删除当前仍冗余的连线 */
   const pruneAll = useCallback(() => {
     if (redundant.length === 0) return;
@@ -307,6 +383,7 @@ export default function App() {
             onClick={() => {
               setMergeMode((m) => (m === false ? true : false));
               setLinkFrom(null);
+              setShareMode(false);
             }}
             disabled={busy}
             title="先点选源卡片（被合并、将删除），再点选保留卡片"
@@ -319,6 +396,14 @@ export default function App() {
           <a className="btn" href="/api/export" download="evidence-snapshot.json">
             导出 JSON
           </a>
+          <button
+            className={`btn${shareMode ? ' active' : ''}`}
+            onClick={() => (shareMode ? exitShareMode() : enterShareMode())}
+            disabled={busy}
+            title="勾选要对外公开的证据，预览并下载脱敏 JSON 快照"
+          >
+            🔗 外部分享
+          </button>
           <button className="btn" onClick={loadSample} disabled={busy}>
             载入示例
           </button>
@@ -375,6 +460,19 @@ export default function App() {
 
       {state && <ReviewChainsPanel state={state} titleOf={titleOf} onHighlight={setReviewChainHL} />}
 
+      {shareMode && state && (
+        <SharePanel
+          state={state}
+          selected={shareSelected}
+          busy={busy}
+          onToggle={toggleShareSelect}
+          onSelectAll={() => setShareSelected(new Set(state.evidence.map((e) => e.id)))}
+          onClear={() => setShareSelected(new Set())}
+          onPreview={requestSharePreview}
+          onCancel={exitShareMode}
+        />
+      )}
+
       {orderPreview && (
         <div className="preview-banner">
           <span>
@@ -413,6 +511,8 @@ export default function App() {
               conflict={conflict}
               linkFrom={linkFrom}
               mergeMode={mergeMode}
+              shareMode={shareMode}
+              shareSelected={shareSelected}
               pruneFocus={pruneFocus}
               orderPath={orderPath}
               preview={orderPreview}
@@ -423,6 +523,7 @@ export default function App() {
               onCancelLink={() => setLinkFrom(null)}
               onConnect={connect}
               onMergeSelect={onMergeSelect}
+              onToggleShare={toggleShareSelect}
               onEdit={setEditing}
               onDelete={deleteCard}
               onDeleteEdge={deleteEdge}
@@ -452,6 +553,15 @@ export default function App() {
           onConfirm={confirmImport}
           onRepreview={repreviewImport}
           onCancel={() => setImportPreview(null)}
+        />
+      )}
+
+      {shareMode && sharePreview && (
+        <SharePreviewDialog
+          snapshot={sharePreview}
+          busy={busy}
+          onDownload={downloadShared}
+          onCancel={() => setSharePreview(null)}
         />
       )}
     </div>
