@@ -174,3 +174,24 @@ export interface MinimumChainsResult {
    */
   groups: string[][];
 }
+
+/* ---------- 外部分享：脱敏快照（只读，不写数据库） ---------- */
+
+/** 脱敏快照：沿用完整快照的 app / version / evidence / edges 与 from / to 端点字段格式 */
+export interface ShareSnapshot {
+  app: string;
+  version: number;
+  exportedAt: string;
+  /** 所选卡片，字段保持当前原值；未选卡片不出现 */
+  evidence: Evidence[];
+  /** 导出连线：仅连接所选卡片，是所选卡片在完整图可达关系下的传递约简 */
+  edges: Array<{ from: string; to: string }>;
+}
+
+/** POST /api/share/preview 与 /api/share/download 的计算结果 */
+export interface ShareResult {
+  /** 脱敏快照（可通过现有导入校验；预览时直接回显供前端展示） */
+  snapshot: ShareSnapshot;
+  /** 去重后所选卡片数 / 导出连线数（孤立卡保留、无连线） */
+  counts: { cards: number; edges: number };
+}

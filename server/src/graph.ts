@@ -696,3 +696,96 @@ export function minimumReviewChains(nodes: OrderableNode[], edges: EdgeLike[]): 
   }
   return { groupCount: groups.length, groups };
 }
+
+/* ---------- 外部分享：脱敏子图（所选卡片间可达关系保持不变的最小导出图） ---------- */
+
+export interface SharedSubgraph {
+  /** 所选卡片 id，按确定性拓扑序（约束先后）排列、已去重 */
+  orderedIds: string[];
+  /**
+   * 导出连线（所选卡片在「完整图可达关系」下的覆盖关系，即限定偏序的传递约简）：
+   * - 仅连接所选卡片，未选卡片及其 id 不出现；
+   * - 任意两张所选卡片在导出图中的可达性与当前完整图一致（允许原图路径经过隐藏卡片）；
+   * - 每条导出边都不可或缺：删除它会破坏其两端这对所选卡片的可达性；
+   * - 不是原图连线的简单截取——原图直连若已被其他所选卡片绕行会被剔除，
+   *   原图没有直连、仅经隐藏卡片可达时反而会补上一条导出边。
+   */
+  edges: EdgeLike[];
+}
+
+/**
+ * 构造对外分享的脱敏子图（纯只读、纯函数）：
+ *
+ * 1. 在当前完整 DAG 上求传递闭包（位图实现），把可达关系限定到所选卡片集合：
+ *    两张所选卡片只要在完整图中可达（路径可以经过未选的隐藏卡片）就算可达；
+ * 2. 取该偏序的「覆盖关系」作为导出边：u→v 导出 ⇔ u 可达 v，且不存在第三张
+ *    所选卡片 w 使 u 可达 w、w 可达 v。覆盖关系的传递闭包恰好等于限定后的
+ *    可达关系，故任意两张所选卡片的可达性与完整图一致（原本不可达的仍不可达）；
+ *    而覆盖边不可能由其他导出边绕行（任何绕行路径的中间点都必须是所选卡片，
+ *    与「无所选中间点」矛盾），故每条导出边都不可或缺。
+ *
+ * 孤立卡片（与其他所选卡片均无可达关系）仍保留在 orderedIds 中、不产生连线；
+ * selectedIds 中的重复 id 去重；调用方须保证 id 均为当前图节点，未知 id 防御性跳过。
+ * 图有环时返回 null。
+ */
+export function buildSharedSubgraph(
+  nodes: OrderableNode[],
+  edges: EdgeLike[],
+  selectedIds: string[],
+): SharedSubgraph | null {
+  const order = stableTopoOrder(nodes, edges);
+  if (!order) return null;
+
+  const pos = new Map(order.map((id, i) => [id, i]));
+  const adj: number[][] = order.map(() => []);
+  for (const e of edges) {
+    const u = pos.get(e.fromId);
+    const v = pos.get(e.toId);
+    if (u === undefined || v === undefined) continue;
+    adj[u].push(v);
+  }
+
+  /* 完整图传递闭包（bigint 位图，第 i 位对应拓扑序第 i 个节点）：
+     reach[u] = u 沿边可达的全部节点；pred[v] = 能到达 v 的全部节点 */
+  const reach: bigint[] = new Array(order.length).fill(0n);
+  for (let u = order.length - 1; u >= 0; u--) {
+    let bits = 0n;
+    for (const v of adj[u]) bits |= (1n << BigInt(v)) | reach[v];
+    reach[u] = bits;
+  }
+  const pred: bigint[] = new Array(order.length).fill(0n);
+  for (let u = 0; u < order.length; u++) {
+    for (const v of adj[u]) pred[v] |= (1n << BigInt(u)) | pred[u];
+  }
+
+  /* 所选卡片（去重、按拓扑序定位）及对应位掩码 */
+  const selectedPos: number[] = [];
+  let selectedMask = 0n;
+  const seen = new Set<string>();
+  for (const id of selectedIds) {
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const p = pos.get(id);
+    if (p === undefined) continue;
+    selectedPos.push(p);
+    selectedMask |= 1n << BigInt(p);
+  }
+  selectedPos.sort((a, b) => a - b);
+
+  /* 覆盖边：u 在所选集合内可达 v，且 u、v 之间不存在所选中转点。
+     u 不在 reach[u]（无自环）、v 不在 pred[v]，交集天然排除端点自身。 */
+  const coverEdges: EdgeLike[] = [];
+  for (const u of selectedPos) {
+    let bits = reach[u] & selectedMask; // 拓扑序上必然全部位于 u 之后
+    while (bits !== 0n) {
+      const lsb = bits & -bits;
+      bits ^= lsb;
+      const v = lsb.toString(2).length - 1; // log2(lsb)：最低位的位编号
+      if ((reach[u] & pred[v] & selectedMask) === 0n) {
+        coverEdges.push({ fromId: order[u], toId: order[v] });
+      }
+    }
+  }
+
+  return { orderedIds: selectedPos.map((p) => order[p]), edges: coverEdges };
+}

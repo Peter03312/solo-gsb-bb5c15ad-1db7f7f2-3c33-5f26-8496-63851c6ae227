@@ -1,4 +1,4 @@
-import type { BypassPathResult, EvidenceFormValues, GraphState, ImportPreviewResult, MergeConflictKind, MinimumChainsResult, MustPassResult, OrderQueryResult, PruneResult, RedundantEdge, TimeWindowResult } from './types';
+import type { BypassPathResult, EvidenceFormValues, GraphState, ImportPreviewResult, MergeConflictKind, MinimumChainsResult, MustPassResult, OrderQueryResult, PruneResult, RedundantEdge, ShareResult, TimeWindowResult } from './types';
 
 export class ApiError extends Error {
   status: number;
@@ -61,5 +61,28 @@ export const api = {
   /** 确认导入：服务端在事务内重新校验令牌、文件内容与当前图，全部一致才整体替换 */
   importConfirm: (token: string, snapshotText: string) =>
     request<GraphState>('/api/import/confirm', json('POST', { token, snapshotText })),
+  /** 分享预览（只读）：按当前勾选与最新图计算脱敏快照，返回快照 JSON 供预览 */
+  sharePreview: (ids: string[]) => request<ShareResult>('/api/share/preview', json('POST', { ids })),
+  /**
+   * 分享下载（只读）：按当前勾选与最新图当场重新计算，并以附件形式返回文件内容。
+   * 不经 request<T>（需要 Blob 落盘），但失败时仍解析 JSON 错误并抛出 ApiError。
+   */
+  shareDownload: async (ids: string[]): Promise<Blob> => {
+    const res = await fetch('/api/share/download', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ids }),
+    });
+    if (!res.ok) {
+      const data = (await res.json().catch(() => ({}))) as {
+        message?: string;
+        code?: string;
+        cycle?: string[];
+        merge?: { kind: MergeConflictKind; path: string[] };
+      };
+      throw new ApiError(res.status, data);
+    }
+    return res.blob();
+  },
   seed: () => request<GraphState>('/api/seed', { method: 'POST' }),
 };

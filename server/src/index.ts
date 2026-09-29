@@ -3,20 +3,22 @@ import fs from 'node:fs';
 import path from 'node:path';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { db, getEdges, getEvidence } from './db';
-import { analyzeMustPass, analyzeTimeWindow, cycleAfterAdding, findBypassPath, findCycle, findRedundantEdges, mergeConflict, minimumReviewChains, planMergeEdges, planPrune, queryOrder, topoLevels } from './graph';
+import { analyzeMustPass, analyzeTimeWindow, buildSharedSubgraph, cycleAfterAdding, findBypassPath, findCycle, findRedundantEdges, mergeConflict, minimumReviewChains, planMergeEdges, planPrune, queryOrder, topoLevels } from './graph';
 import {
   checkPreviewToken,
   computeImportDiff,
   createPreviewToken,
   deletePreviewToken,
   graphFingerprint,
+  MAX_EDGES,
+  MAX_EVIDENCE,
   parseEvidenceInput,
   parseSnapshot,
   snapshotHash,
   toEvidenceRows,
 } from './importing';
 import { resetWithSample, seedIfEmpty } from './seed';
-import type { BypassPathResult, GraphState, MinimumChainsResult, MustPassResult, OrderQueryResult, OrderWitness, PruneResult, RedundancyReport, TimeWindowResult } from './types';
+import type { BypassPathResult, GraphState, MinimumChainsResult, MustPassResult, OrderQueryResult, OrderWitness, PruneResult, RedundancyReport, ShareResult, TimeWindowResult } from './types';
 
 const app = express();
 app.use(express.json({ limit: '5mb' }));
@@ -433,6 +435,81 @@ app.get('/api/review-chains', (_req, res) => {
   }
   const result: MinimumChainsResult = { cardCount: evidence.length, ...analysis };
   res.json(result);
+});
+
+/* ---------- 外部分享：脱敏快照（只读，不写数据库） ---------- */
+
+/**
+ * 按所选卡片计算对外分享的脱敏快照（预览与下载共用）：
+ * - body 须为 { ids: string[] }，重复 id 去重；空选择 / 非法 id 明确拒绝；
+ * - 所选卡片字段保持原值，未选卡片及其 id 不出现在结果中；
+ * - 导出边只连接所选卡片，且是「完整图可达关系限定到所选卡片」的覆盖关系
+ *   （传递约简）：任意两张所选卡片的可达性与完整图一致（允许路径经过隐藏卡片），
+ *   每条导出边都不可或缺，并非原图连线的简单截取；孤立卡保留；
+ * - 沿用完整快照的 app / version / evidence / edges 与 from / to 字段，
+ *   可直接通过现有导入校验。
+ * 纯只读：不写数据库。图有环返回 409。
+ */
+function buildShareResult(rawIds: unknown): ShareResult | { status: number; message: string } {
+  if (!Array.isArray(rawIds) || rawIds.some((x) => typeof x !== 'string')) {
+    return { status: 400, message: 'ids 必须为证据 id 字符串数组' };
+  }
+  // 去重（保持首次出现顺序仅用于展示无关；计算按拓扑序）
+  const ids = [...new Set(rawIds as string[])];
+  if (ids.length === 0) {
+    return { status: 400, message: '请至少勾选一张要公开的证据卡片（空选择无法生成分享快照）' };
+  }
+
+  const evidence = getEvidence();
+  const byId = new Map(evidence.map((e) => [e.id, e]));
+  const unknown = ids.filter((id) => !byId.has(id));
+  if (unknown.length > 0) {
+    // 不回显未知 id 本身：未公开/已删除的节点标识不应出现在响应中
+    return { status: 404, message: '存在未知的证据卡片 id：可能已被删除，请按当前页面重新勾选后重试' };
+  }
+
+  const sub = buildSharedSubgraph(
+    evidence.map((e) => ({ id: e.id, createdAt: e.createdAt })),
+    getEdges(),
+    ids,
+  );
+  if (!sub) {
+    return { status: 409, message: '当前约束图存在环，无法生成分享快照' };
+  }
+  if (sub.edges.length > MAX_EDGES || sub.orderedIds.length > MAX_EVIDENCE) {
+    return { status: 400, message: '所选卡片产生的导出快照规模过大，请缩小公开范围后重试' };
+  }
+
+  const selected = new Map(sub.orderedIds.map((id) => [id, byId.get(id)!]));
+  return {
+    snapshot: {
+      app: 'evidence-chain-orchestrator',
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      evidence: sub.orderedIds.map((id) => selected.get(id)!),
+      edges: sub.edges.map((e) => ({ from: e.fromId, to: e.toId })),
+    },
+    counts: { cards: sub.orderedIds.length, edges: sub.edges.length },
+  };
+}
+
+/** 分享预览（只读）：返回脱敏快照 JSON 供前端预览，不触发下载 */
+app.post('/api/share/preview', (req, res) => {
+  const result = buildShareResult((req.body ?? {}).ids);
+  if ('status' in result) return res.status(result.status).json({ message: result.message });
+  res.json(result);
+});
+
+/**
+ * 分享下载（只读）：按**当前最新图**当场重新计算脱敏快照并以附件下发；
+ * 不依赖前端预览缓存——图或选择变化后前端会清除旧预览，
+ * 下载总是携带最新勾选重新请求，因此拿到的文件必然基于最新图。
+ */
+app.post('/api/share/download', (req, res) => {
+  const result = buildShareResult((req.body ?? {}).ids);
+  if ('status' in result) return res.status(result.status).json({ message: result.message });
+  res.setHeader('Content-Disposition', 'attachment; filename="evidence-share.json"');
+  res.json(result.snapshot);
 });
 
 /* ---------- 导入 / 导出 / 示例 ---------- */

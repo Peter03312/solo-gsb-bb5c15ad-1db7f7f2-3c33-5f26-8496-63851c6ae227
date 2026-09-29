@@ -3,6 +3,7 @@ import { test } from 'node:test';
 import {
   analyzeMustPass,
   analyzeTimeWindow,
+  buildSharedSubgraph,
   cycleAfterAdding,
   findBypassPath,
   findCycle,
@@ -914,4 +915,143 @@ test('minimumReviewChains：有环图返回 null', () => {
     { fromId: 'b', toId: 'a' },
   ];
   assert.equal(minimumReviewChains(nodes, edges), null);
+});
+
+/* ---------- 外部分享：脱敏子图 ---------- */
+
+/** 参照实现：在边集 graph 上判定 start 是否可达 goal（沿导出边） */
+function refReachable(edges: Array<{ fromId: string; toId: string }>, start: string, goal: string): boolean {
+  return findPath(edges, start, goal) !== null;
+}
+
+test('buildSharedSubgraph：隐藏中转卡不在结果中，但跨隐藏卡的可达关系保留为补边', () => {
+  // 完整图 a → h(隐藏) → b：选 a、b 时必须补出 a→b 导出边
+  const nodes = nodesOf(['a', 'h', 'b']);
+  const edges = [
+    { fromId: 'a', toId: 'h' },
+    { fromId: 'h', toId: 'b' },
+  ];
+  const r = buildSharedSubgraph(nodes, edges, ['b', 'a'])!;
+  assert.deepEqual(r.orderedIds, ['a', 'b']);
+  assert.deepEqual(r.edges, [{ fromId: 'a', toId: 'b' }]);
+});
+
+test('buildSharedSubgraph：菱形选起终点只保留直达导出边（覆盖关系）', () => {
+  // a → x → c，a → y → c，且 a → c 直连；选 {a,x,y,c} 时
+  // a→c 被所选中转绕行，不导出；选 {a,c} 时 a→c 必须导出
+  const nodes = nodesOf(['a', 'x', 'y', 'c']);
+  const edges = [
+    { fromId: 'a', toId: 'x' },
+    { fromId: 'a', toId: 'y' },
+    { fromId: 'x', toId: 'c' },
+    { fromId: 'y', toId: 'c' },
+    { fromId: 'a', toId: 'c' },
+  ];
+  const full = buildSharedSubgraph(nodes, edges, ['a', 'x', 'y', 'c'])!;
+  assert.deepEqual(
+    full.edges,
+    [
+      { fromId: 'a', toId: 'x' },
+      { fromId: 'a', toId: 'y' },
+      { fromId: 'x', toId: 'c' },
+      { fromId: 'y', toId: 'c' },
+    ],
+    '原图直连 a→c 已可经所选卡片绕行，不应截取进导出图',
+  );
+  const ends = buildSharedSubgraph(nodes, edges, ['c', 'a'])!;
+  assert.deepEqual(ends.edges, [{ fromId: 'a', toId: 'c' }]);
+});
+
+test('buildSharedSubgraph：任意两张所选卡片的可达性与完整图一致', () => {
+  const ids = ['a', 'b', 'c', 'd', 'e', 'f', 'g'];
+  const edges = [
+    { fromId: 'a', toId: 'b' },
+    { fromId: 'b', toId: 'c' },
+    { fromId: 'a', toId: 'd' },
+    { fromId: 'd', toId: 'f' }, // f 经隐藏卡 d 与其他节点连通
+    { fromId: 'c', toId: 'e' },
+    { fromId: 'g', toId: 'a' },
+  ];
+  for (const selected of [['a', 'b', 'e'], ['g', 'c', 'f'], ['e', 'f', 'g'], ids] as string[][]) {
+    const r = buildSharedSubgraph(nodesOf(ids), edges, selected)!;
+    for (const u of r.orderedIds) {
+      for (const v of r.orderedIds) {
+        if (u === v) continue;
+        assert.equal(
+          refReachable(r.edges, u, v),
+          findPath(edges, u, v) !== null,
+          `所选卡片 ${u}→${v} 的可达性必须与完整图一致（选择 ${selected.join(',')}）`,
+        );
+      }
+    }
+  }
+});
+
+test('buildSharedSubgraph：移除任一导出边都会破坏至少一对所选卡片的可达性', () => {
+  const ids = ['a', 'b', 'c', 'd', 'e'];
+  const edges = [
+    { fromId: 'a', toId: 'b' },
+    { fromId: 'b', toId: 'c' },
+    { fromId: 'a', toId: 'd' },
+    { fromId: 'd', toId: 'c' },
+    { fromId: 'c', toId: 'e' },
+  ];
+  const selected = ['a', 'b', 'c', 'd', 'e'];
+  const r = buildSharedSubgraph(nodesOf(ids), edges, selected)!;
+  for (let i = 0; i < r.edges.length; i++) {
+    const rest = r.edges.filter((_, j) => j !== i);
+    const dead = r.edges[i];
+    assert.equal(
+      refReachable(rest, dead.fromId, dead.toId),
+      false,
+      `导出边 ${dead.fromId}→${dead.toId} 应不可或缺`,
+    );
+  }
+});
+
+test('buildSharedSubgraph：孤立卡保留且无连线；重复选择去重；未知 id 防御性跳过', () => {
+  const nodes = nodesOf(['a', 'b', 'iso']);
+  const edges = [{ fromId: 'a', toId: 'b' }];
+  const r = buildSharedSubgraph(nodes, edges, ['iso', 'a', 'a', 'ghost-id', 'b'])!;
+  assert.deepEqual(r.orderedIds, ['a', 'b', 'iso']);
+  assert.deepEqual(r.edges, [{ fromId: 'a', toId: 'b' }]);
+});
+
+test('buildSharedSubgraph：原本不可达的所选卡片导出后仍不可达', () => {
+  const nodes = nodesOf(['a', 'b', 'c']);
+  // a→c 与 b→c：a、b 之间完整图中本就不可达
+  const edges = [
+    { fromId: 'a', toId: 'c' },
+    { fromId: 'b', toId: 'c' },
+  ];
+  const r = buildSharedSubgraph(nodes, edges, ['a', 'b', 'c'])!;
+  assert.equal(refReachable(r.edges, 'a', 'b'), false);
+  assert.equal(refReachable(r.edges, 'b', 'a'), false);
+  assert.deepEqual(r.edges, [
+    { fromId: 'a', toId: 'c' },
+    { fromId: 'b', toId: 'c' },
+  ]);
+});
+
+test('buildSharedSubgraph：结果确定性（同一选择多次计算一致）', () => {
+  const ids = ['a', 'b', 'c', 'd'];
+  const edges = [
+    { fromId: 'a', toId: 'b' },
+    { fromId: 'b', toId: 'd' },
+    { fromId: 'a', toId: 'c' },
+    { fromId: 'c', toId: 'd' },
+  ];
+  assert.deepEqual(
+    buildSharedSubgraph(nodesOf(ids), edges, ['d', 'c', 'b', 'a']),
+    buildSharedSubgraph(nodesOf(ids), edges, ['a', 'b', 'c', 'd']),
+  );
+});
+
+test('buildSharedSubgraph：有环图返回 null', () => {
+  const nodes = nodesOf(['a', 'b']);
+  const edges = [
+    { fromId: 'a', toId: 'b' },
+    { fromId: 'b', toId: 'a' },
+  ];
+  assert.equal(buildSharedSubgraph(nodes, edges, ['a', 'b']), null);
 });

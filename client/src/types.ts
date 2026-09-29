@@ -242,3 +242,21 @@ export interface ImportPreviewResult {
   token: string;
   diff: ImportDiff;
 }
+
+/* ---------- 外部分享：脱敏快照（只读，不写数据库） ---------- */
+
+/** 脱敏快照：沿用完整快照的 app / version / evidence / edges 与 from / to 端点字段 */
+export interface ShareSnapshot {
+  app: string;
+  version: number;
+  exportedAt: string;
+  evidence: Evidence[];
+  edges: Array<{ from: string; to: string }>;
+}
+
+/** POST /api/share/preview 响应 */
+export interface ShareResult {
+  snapshot: ShareSnapshot;
+  /** 去重后所选卡片数 / 导出连线数（孤立卡保留、无连线） */
+  counts: { cards: number; edges: number };
+}

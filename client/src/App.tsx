@@ -8,6 +8,7 @@ import MustPassPanel from './components/MustPassPanel';
 import OrderQueryPanel from './components/OrderQueryPanel';
 import PrunePanel from './components/PrunePanel';
 import ReviewChainsPanel from './components/ReviewChainsPanel';
+import SharePanel from './components/SharePanel';
 import TimeWindowPanel from './components/TimeWindowPanel';
 import TimelinePanel from './components/TimelinePanel';
 import type { Evidence, EvidenceFormValues, GraphState, ImportDiff, MergeConflict, MustPassHighlight, OrderWitness, RedundantEdge, ReviewChainHighlight, TimeWindowHighlight } from './types';
@@ -374,6 +375,8 @@ export default function App() {
       {state && <TimeWindowPanel state={state} titleOf={titleOf} onHighlight={setTimeWindowHL} />}
 
       {state && <ReviewChainsPanel state={state} titleOf={titleOf} onHighlight={setReviewChainHL} />}
+
+      {state && <SharePanel state={state} titleOf={titleOf} />}
 
       {orderPreview && (
         <div className="preview-banner">
